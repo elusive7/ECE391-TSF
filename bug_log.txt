@@ -1,0 +1,217 @@
+Bug Log ECE391. 
+
+'#' denotes bug
+'@' denotes fix
+'*' denotes note
+
+
+
+3.1
+----------------------------------
+idt.c:
+# Using trap gates for rtc as a hack is not acceptable
+@ 	Use regular gates....
+
+# Keyboard handler would eventually lead to a stack overflow
+@	Forgot to use assembly wrapper so stack wasn't being 
+	preserved correctly.
+
+
+
+i8259.c
+# The rtc didn't work 
+@   Turned on IRQ2 for the slave PIC
+
+
+
+paging.c: 
+# Dereferencing Null does not cause page fault.
+@ 	Initialized first entry of page table to 0 
+
+# TODO: rewrite page table and directory as struct
+
+
+
+3.2
+-----------------------------------
+filesys.c:
+# read_dentry_by_name unable to locate file
+@ 	Data block offset misplaced, forgot to account for intial block size.
+
+# read_data returned only first bytes of file, data recieved clearly incorrect.
+@ 	Original filesystem contained too many bugs
+	Rewrote FS, see comments for details. 
+
+
+
+rtc.c:
+# rtc_write would not properly change the frequency.
+@	wasn't actually writing anything out to RTC
+
+
+
+3.3
+-----------------------------------
+paging.c:
+# Triple fault at beginning of kernel execution, paging causing errors
+@ 	Realized KERNEL_BEGIN included extra 0 at end of address, rendering it at
+	64MB instead of 4MB 
+
+
+
+syscall.c:
+# Unable to execute any program
+@ 	Eric Clark showed us how to properly debug 
+	IDT entries were set wrong...
+	Also realized that none of the syscalls were written yet,
+
+# Stack gets messed up on return from a sys call
+@	pushed instead of popping saved registers
+
+
+
+3.4
+-----------------------------------
+filesys.c:
+# CAT does not display programs correctly
+@ 	Keyboard handler was broken, thus files didn't display properly.
+	Once keyboard was fixed, cat displays properly. 
+
+# GREP returns read file errors
+@	Read Solution Above
+
+
+
+keyboard.c:
+# typing into terminal after shell's 3910S> starts typing at 3
+@	added a condition that accounts for terminal write putting characters on
+	the screen
+
+# bunch of video memory bugs
+1)	When running cat, specifically cat <executable> or cat
+	verylargetxtwitheverylongname.txt, any lines that were more than 80
+	characters did not move down and just overwrote itself.
+@	The problem was in terminal_write, which was trying to change video memory,
+	when functions in lib.c also change video memory, so we changed it by just
+	calling lib.c functions in  terminal_write, giving complete control to
+	lib.c.
+2)	This caused another problem where cat verylargetxtwitheverylongname.txt
+	would display extra lines when the input was exactly 80 characters and
+	a '\n' was included.
+@	Added another edge case for this specific problem.
+
+
+
+syscall.c:
+# Stack gets screwed up, thus unable to return to kernel after first shell is
+	called.
+@ 	badger. 
+
+# Couldn't return to shell after executing a program
+@	We weren't allocating memory correctly, kept re-using the same space.
+
+# Random page faults
+@	We were storing current esp into PCB instead of calculating a new stack
+	pointer
+
+# Page fault after trying to exit first shell
+@	We were overwriting the kernel stack(starting at 8MB). Solution: push
+	kernel stacks and PCB up 8KB so k stack wouldn't be overwritten.
+
+# Halt does not return to the proper parent program
+@ 	The stack switch was set up incorrectly so it didn't work.
+
+wrapper.S
+# Random page faults
+@	Didn't add an IRET instruction to one of the cases.
+
+
+
+3.5
+------------------------------------
+filesys.c 
+# FISH only displayed frame1.txt, but blinks and syncs I & M.
+@ 	Through gdb, found out inode pointers ended up pointing at same location.
+	Instead of using inode pointers, just used inodes. 
+	Why did they ask us to use pointers, when we could just use inodes? 
+
+# cat grep doesn't show entire file. output ends at v, but should end at xyz__
+@ 	read_data had a slight bug where the function returns 0 if end of file is
+	during read.
+	However, if end of file is reached, it should NOT return 0.
+	Instead, it should return the number of bytes read.
+	Only if the offset is greater than the filelength do we return 0.
+	This causes cat to fully function as intended.
+	In order to test full functionality, hex dump was analyzed. 
+	Note: GREP begins at inode number 26, which in our case is address 0x39000.
+		  The calculation is 4kb + 30*4kb (for inodes) + 26*4kb = x39000.
+		  The entire size of GREP is 6149 bytes, which means two blocks are
+		  allocated.
+		  The second block has a number of 50, which is at address 50*4kb =
+		  0x51000.
+		  GREP ends at 0x51805, which corresponds to "xyz__"
+
+
+
+keyboard.c:
+# Added multiterminal support, however unable to execute 3 shells.
+@	Executed shell manually three times with a hack.
+	In terminal_read:
+	// 	Instead of waiting for user input, we'll just go ahead and fill up the
+		buffer for them. 
+	if(shell_count<3){
+		buf = "shell";
+		return; 
+	}  	
+	In terminal_write, to prevent 391OS> from showing up 3 times
+	if(shell_count<3){
+		return; 
+	}
+# Couldn't switch back into shell 1 after executing shell 2.
+@	We weren't saving esp/ebp in interrupt handler, instead we were using old
+	values from PCB :/. 
+
+# Page fault at 0x12 after fixing above issue.
+@	When copy pasting, forgot to change assembly so would store esp in both
+	esp/ebp.
+	Luckily, we were GDB wizards by now and it only took us a few minutes to
+	track this down.
+
+# WOULD STILL PAGE FAULT SOMETIMES DESPITE FLAWLESS CODE
+@	Apparently wasn't flawless code, we were using term(0,1,2) to calculate
+	esp0 when we should have been using PCB's PID to figure out esp to actually
+	find correct stack. 
+
+# Keyboard interrupts disabled when switching to different terminal
+@ 	Realized you couldn't use the hack above because you would never be able to
+	write to shell's 1 & 2
+	Instead, rewrote terminal switching so that shells are executed upon ALT+F#
+	It seems like this is the only logical solution. Attempting to spawn three
+	shells at startup with a hack only leads to failure. I'm pretty sure Badger
+	told us it would be easier to start up three terminals all at once.
+	Would he lie to us? 
+
+
+
+paging.c:
+# FISH page faults at line 112 of fish.c, reading frame1.txt causes page fault
+@ 	Fault from not properly allocating video memory. 
+	Vidmap mapped user pointer to virtual address that was not allocated in
+	paging. Switched 0xB8000 to properly allocated page, at 136MB.
+	
+	* Trying to map 0xB8000 for vidmap results in page fault because 0xB8000 is
+	  a kernel page.
+	  FISH is a user program, so privilege levels don't match.
+	  User bit is not set on the page directory entry 0. 
+
+
+
+syscall.c:
+# page fault after changing terminal and after executing a single program
+@ 	This bug disappeared once we fixed halt().
+
+
+
+sched.c:
+# nothing works - page faults at disable_irq(PIT)
+*	never fixed
